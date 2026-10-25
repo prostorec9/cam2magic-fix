@@ -18,14 +18,14 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Decode APK with Apktool
+      - name: Decode DEX only with Apktool
         run: |
           wget -q https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool -O /usr/local/bin/apktool
           wget -q https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar -O /usr/local/bin/apktool.jar
           chmod +x /usr/local/bin/apktool /usr/local/bin/apktool.jar
-          apktool d base.apk -o decoded_apk
+          apktool d -r base.apk -o decoded_apk
 
-      - name: Patch Camera3.smali to preserve position in TikTok battles
+      - name: Patch Camera3.smali safely without register conflicts
         run: |
           python3 - << 'EOF'
           path = "decoded_apk/smali/com/nothing/camera2magic/hook/Camera3.smali"
@@ -38,7 +38,24 @@ jobs:
           assert field_target in content, "Field target not found"
           content = content.replace(field_target, field_replacement, 1)
 
-          # 2. Сохраняем текущую позицию в handleLocalVideo$lambda$9 перед очисткой плейлиста
+          # 2. Добавляем изолированный метод сохранения позиции в конец файла (без конфликта регистров)
+          helper_method = (
+              "\n.method public static savePosIfValid(Lm30;)V\n"
+              "    .locals 4\n\n"
+              "    if-eqz p0, :cond_end\n\n"
+              "    invoke-virtual {p0}, Lm30;->g()J\n\n"
+              "    move-result-wide v0\n\n"
+              "    const-wide/16 v2, 0x0\n\n"
+              "    cmp-long v2, v0, v2\n\n"
+              "    if-lez v2, :cond_end\n\n"
+              "    sput-wide v0, Lcom/nothing/camera2magic/hook/Camera3;->savedPositionMs:J\n\n"
+              "    :cond_end\n"
+              "    return-void\n"
+              ".end method\n"
+          )
+          content = content + helper_method
+
+          # 3. Вызываем savePosIfValid перед перезагрузкой плейлиста в handleLocalVideo$lambda$9
           old_block_1 = (
               "    invoke-virtual {v1, v5}, Lm30;->j(Lt21;)I\n\n"
               "    .line 98\n"
@@ -48,18 +65,16 @@ jobs:
           )
           new_block_1 = (
               "    invoke-virtual {v1, v5}, Lm30;->j(Lt21;)I\n\n"
-              "    invoke-virtual {v1}, Lm30;->g()J\n"
-              "    move-result-wide v6\n"
-              "    const-wide/16 v13, 0x0\n"
-              "    cmp-long v8, v6, v13\n"
-              "    if-lez v8, :cond_skip_save_pos1\n"
-              "    sput-wide v6, Lcom/nothing/camera2magic/hook/Camera3;->savedPositionMs:J\n"
-              "    :cond_skip_save_pos1"
+              "    invoke-static {v1}, Lcom/nothing/camera2magic/hook/Camera3;->savePosIfValid(Lm30;)V\n\n"
+              "    .line 98\n"
+              "    .line 99\n"
+              "    .line 100\n"
+              "    invoke-virtual {v1}, Lm30;->g()J"
           )
           assert old_block_1 in content, "old_block_1 not found"
           content = content.replace(old_block_1, new_block_1, 1)
 
-          # 3. Заменяем старт с нуля (-0x7fffffffffffffffL) на старт с savedPositionMs
+          # 4. Подставляем сохраненную позицию вместо C.TIME_UNSET (-0x7fffffffffffffffL)
           old_block_2 = (
               "    invoke-virtual {v2, v4}, Lk31;->a(Z)I\n\n"
               "    .line 211\n"
@@ -74,19 +89,20 @@ jobs:
           )
           new_block_2 = (
               "    invoke-virtual {v2, v4}, Lk31;->a(Z)I\n\n"
+              "    .line 211\n"
+              "    .line 212\n"
+              "    .line 213\n"
               "    move-result v14\n\n"
+              "    .line 214\n"
               "    iget-object v0, v1, Lm30;->Y:Lt21;\n\n"
-              "    sget-wide v6, Lcom/nothing/camera2magic/hook/Camera3;->savedPositionMs:J\n"
-              "    const-wide/16 v15, 0x0\n"
-              "    cmp-long v8, v6, v15\n"
-              "    if-gtz v8, :cond_use_saved_pos\n"
-              "    const-wide v6, -0x7fffffffffffffffL    # -4.9E-324\n"
-              "    :cond_use_saved_pos"
+              "    .line 215\n"
+              "    .line 216\n"
+              "    sget-wide v6, Lcom/nothing/camera2magic/hook/Camera3;->savedPositionMs:J"
           )
           assert old_block_2 in content, "old_block_2 not found"
           content = content.replace(old_block_2, new_block_2, 1)
 
-          # 4. В stop$lambda$17 сохраняем текущую позицию плеера перед закрытием камеры
+          # 5. Вызываем savePosIfValid в stop$lambda$17 перед закрытием сессии камеры в баттле
           old_block_3 = (
               "    iget-object v3, v2, Lm30;->Y:Lt21;\n\n"
               "    .line 82\n"
@@ -94,14 +110,10 @@ jobs:
               "    invoke-virtual {v2, v3}, Lm30;->j(Lt21;)I"
           )
           new_block_3 = (
-              "    invoke-virtual {v2}, Lm30;->g()J\n"
-              "    move-result-wide v5\n"
-              "    const-wide/16 v7, 0x0\n"
-              "    cmp-long v7, v5, v7\n"
-              "    if-lez v7, :cond_skip_save_stop\n"
-              "    sput-wide v5, Lcom/nothing/camera2magic/hook/Camera3;->savedPositionMs:J\n"
-              "    :cond_skip_save_stop\n"
+              "    invoke-static {v2}, Lcom/nothing/camera2magic/hook/Camera3;->savePosIfValid(Lm30;)V\n\n"
               "    iget-object v3, v2, Lm30;->Y:Lt21;\n\n"
+              "    .line 82\n"
+              "    .line 83\n"
               "    invoke-virtual {v2, v3}, Lm30;->j(Lt21;)I"
           )
           assert old_block_3 in content, "old_block_3 not found"
@@ -112,20 +124,17 @@ jobs:
           print("Successfully patched Camera3.smali!")
           EOF
 
-      - name: Rebuild and Sign APK
+      - name: Inject patched DEX into original APK and Sign
         run: |
-          apktool b decoded_apk -o patched-unaligned.apk
-          
-          # Возвращаем файлы конфигурации LibXposed из оригинального APK
-          unzip -q base.apk "META-INF/services/*" -d meta_extracted || true
-          if [ -d "meta_extracted/META-INF" ]; then
-            cd meta_extracted && zip -qr ../patched-unaligned.apk META-INF/ && cd ..
-          fi
+          apktool b decoded_apk -o temp_built.apk
+          cp base.apk patched-unaligned.apk
+          zip -d patched-unaligned.apk "META-INF/*.SF" "META-INF/*.RSA" "META-INF/*.DSA" "META-INF/*.EC" "META-INF/MANIFEST.MF" || true
+          cd decoded_apk/build/apk && zip -0 -r ../../../patched-unaligned.apk classes*.dex && cd ../../..
 
           BUILD_TOOLS_DIR="$ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | tail -n 1)"
           "$BUILD_TOOLS_DIR/zipalign" -p -f -v 4 patched-unaligned.apk Cam2Magic-BattleFixed.apk
           keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-          "$BUILD_TOOLS_DIR/apksigner" sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android Cam2Magic-BattleFixed.apk
+          "$BUILD_TOOLS_DIR/apksigner" sign --ks debug.keystore --ks-pass pass:android --key-pass pass:android --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true Cam2Magic-BattleFixed.apk
 
       - name: Upload Patched APK
         uses: actions/upload-artifact@v4
