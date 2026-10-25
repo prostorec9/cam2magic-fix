@@ -1,0 +1,31 @@
+name: Inspect and Patch APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Decode APK with Apktool
+        run: |
+          wget -q https://raw.githubusercontent.com/iBotPeaches/Apktool/master/scripts/linux/apktool -O /usr/local/bin/apktool
+          wget -q https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar -O /usr/local/bin/apktool.jar
+          chmod +x /usr/local/bin/apktool /usr/local/bin/apktool.jar
+          apktool d base.apk -o decoded_apk
+
+      - name: Find MediaPlayer and Extractor hooks in Smali
+        run: |
+          echo "=== FILES WITH MEDIAPLAYER OR SEEKTO ==="
+          grep -rnE "android/media/MediaPlayer|android/media/MediaExtractor|seekTo|getCurrentPosition" decoded_apk/smali* || true
+
+      - name: Upload decoded Smali files
+        uses: actions/upload-artifact@v4
+        with:
+          name: Decoded-Smali-Files
+          path: decoded_apk/smali*
