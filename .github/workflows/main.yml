@@ -115,6 +115,13 @@ jobs:
       - name: Rebuild and Sign APK
         run: |
           apktool b decoded_apk -o patched-unaligned.apk
+          
+          # Возвращаем файлы конфигурации LibXposed из оригинального APK
+          unzip -q base.apk "META-INF/services/*" -d meta_extracted || true
+          if [ -d "meta_extracted/META-INF" ]; then
+            cd meta_extracted && zip -qr ../patched-unaligned.apk META-INF/ && cd ..
+          fi
+
           BUILD_TOOLS_DIR="$ANDROID_HOME/build-tools/$(ls $ANDROID_HOME/build-tools | tail -n 1)"
           "$BUILD_TOOLS_DIR/zipalign" -p -f -v 4 patched-unaligned.apk Cam2Magic-BattleFixed.apk
           keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
